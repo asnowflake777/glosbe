@@ -2,6 +2,7 @@ package glosbe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/anaskhan96/soup"
 	"github.com/go-resty/resty/v2"
@@ -34,6 +35,8 @@ type Example struct {
 	DstLangText string
 }
 
+var ErrNotFound = errors.New("not found")
+
 func (c *Client) Translate(ctx context.Context, req *TranslateRequest) (*TranslateResponse, error) {
 	resp, err := c.r.R().
 		SetContext(ctx).
@@ -42,6 +45,9 @@ func (c *Client) Translate(ctx context.Context, req *TranslateRequest) (*Transla
 		return nil, err
 	}
 	if resp.StatusCode() != http.StatusOK {
+		if resp.StatusCode() == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("unexpected status code: %s", resp.Status())
 	}
 	doc := soup.HTMLParse(resp.String())
