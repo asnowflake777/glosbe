@@ -7,10 +7,14 @@ import (
 	"github.com/anaskhan96/soup"
 	"github.com/go-resty/resty/v2"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
-const GlosbeEndpoint = "https://glosbe.com"
+const (
+	endpoint          = "https://glosbe.com"
+	translateEndpoint = "https://translate.glosbe.com/"
+)
 
 type Client struct {
 	r *resty.Client
@@ -26,10 +30,6 @@ type TranslateRequest struct {
 	Text string
 }
 
-type TranslateResponse struct {
-	Examples []Example
-}
-
 type Example struct {
 	SrcLangText string
 	DstLangText string
@@ -37,18 +37,34 @@ type Example struct {
 
 var ErrNotFound = errors.New("not found")
 
-func (c *Client) Translate(ctx context.Context, req *TranslateRequest) (*TranslateResponse, error) {
-	resp, err := c.r.R().
-		SetContext(ctx).
-		Get(fmt.Sprintf("%s/%s/%s/%s", GlosbeEndpoint, req.Src, req.Dst, req.Text))
+func (c *Client) Translate(ctx context.Context, req *TranslateRequest) (string, error) {
+	uri, err := url.JoinPath(translateEndpoint, req.Src+"-"+req.Dst, req.Text)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.do(ctx, uri)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "Перевода нет(", err
+		}
+		return "", err
+	}
+	doc := soup.HTMLParse(resp.String())
+	output := doc.Find("app-page-translator-translation-output").Find("div")
+	if output.Pointer == nil {
+		return "Перевода нет(", nil
+	}
+	return output.FullText(), nil
+}
+
+func (c *Client) Examples(ctx context.Context, req *TranslateRequest) ([]Example, error) {
+	uri, err := url.JoinPath(endpoint, req.Src, req.Dst, req.Text)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode() != http.StatusOK {
-		if resp.StatusCode() == http.StatusNotFound {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("unexpected status code: %s", resp.Status())
+	resp, err := c.do(ctx, uri)
+	if err != nil {
+		return nil, err
 	}
 	doc := soup.HTMLParse(resp.String())
 	examplesBlock := doc.Find("div", "id", "tmem_first_examples")
@@ -58,14 +74,28 @@ func (c *Client) Translate(ctx context.Context, req *TranslateRequest) (*Transla
 		return nil, fmt.Errorf("unexpected number of examples in src(%d) and dst(%d)",
 			len(srcExamplesBlck), len(dstExamplesBlck))
 	}
-	res := &TranslateResponse{
-		Examples: make([]Example, len(srcExamplesBlck)),
-	}
+	examples := make([]Example, len(srcExamplesBlck))
 	for i := range len(srcExamplesBlck) {
-		res.Examples[i] = Example{
+		examples[i] = Example{
 			SrcLangText: strings.TrimSpace(srcExamplesBlck[i].FullText()),
 			DstLangText: strings.TrimSpace(dstExamplesBlck[i].FullText()),
 		}
 	}
-	return res, nil
+	return examples, nil
+}
+
+func (c *Client) do(ctx context.Context, uri string) (*resty.Response, error) {
+	resp, err := c.r.R().
+		SetContext(ctx).
+		Get(uri)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode() != http.StatusOK {
+		if resp.StatusCode() == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("unexpected status code: %s", resp.Status())
+	}
+	return resp, nil
 }
