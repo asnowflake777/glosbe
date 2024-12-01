@@ -26,6 +26,9 @@ func NewExampleHandler(b *tgbotapi.BotAPI, c *glosbe.Client) *ExampleHandler {
 }
 
 func (h *ExampleHandler) Handle(ctx context.Context, update tgbotapi.Update) error {
+	if err := h.handleQuery(update); err != nil {
+		return err
+	}
 	msg := update.CallbackQuery.Message
 	text := msg.Text
 	if msg.ReplyToMessage != nil {
@@ -35,17 +38,23 @@ func (h *ExampleHandler) Handle(ctx context.Context, update tgbotapi.Update) err
 	if err != nil && !errors.Is(err, glosbe.ErrNotFound) {
 		return err
 	}
-	if len(examples) > 0 {
-		h.d.Store(msg.Chat.ID, examples)
-	}
 	if err = h.sendExample(update, examples); err != nil {
 		return err
+	}
+	if len(examples) > 1 {
+		h.d.Store(msg.Chat.ID, examples[1:])
 	}
 	return nil
 }
 
 func (h *ExampleHandler) Next(_ context.Context, update tgbotapi.Update) error {
+	if err := h.handleQuery(update); err != nil {
+		return err
+	}
 	examples := h.loadExamples(update.CallbackQuery.Message.Chat.ID)
+	if len(examples) == 0 {
+		return nil
+	}
 	if err := h.sendExample(update, examples); err != nil {
 		return err
 	}
@@ -69,7 +78,7 @@ func (h *ExampleHandler) loadExamples(chatID int64) []glosbe.Example {
 	return examples
 }
 
-func (h *ExampleHandler) sendExample(update tgbotapi.Update, examples []glosbe.Example) error {
+func (h *ExampleHandler) handleQuery(update tgbotapi.Update) error {
 	callback := tgbotapi.NewCallback(update.CallbackQuery.ID, update.CallbackQuery.Data)
 	if _, err := h.b.Request(callback); err != nil {
 		return err
@@ -79,10 +88,15 @@ func (h *ExampleHandler) sendExample(update tgbotapi.Update, examples []glosbe.E
 			return err
 		}
 	}
+	return nil
+}
 
+func (h *ExampleHandler) sendExample(update tgbotapi.Update, examples []glosbe.Example) error {
 	msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Примеров нет(")
 	if len(examples) > 0 {
 		msg.Text = formatExample(examples[0])
+	}
+	if len(examples) > 1 {
 		msg.ReplyMarkup = AddInlineButtonData("Ещё", "/next")
 	}
 
